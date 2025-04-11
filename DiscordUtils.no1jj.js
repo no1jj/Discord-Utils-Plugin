@@ -26,7 +26,7 @@ import "@utils/discord";
 
 class ConfigurationManager {
     constructor() {
-        this.storageKey = "discord_enhancer_config";
+        this.storageKey = "discord_utils_config";
         this.defaultConfig = {
             messageFormat: {
                 autoBold: false,
@@ -132,7 +132,7 @@ class CallManager {
 
     copyCurrentCallIp() {
         if (!this.currentCallIp) {
-            showToast("통방에 들어가있지가... 않거나 오류가 발생한것 같아요.", Toasts.Type.FAILURE);
+            showToast("통방에 들어가있지 않거나 오류가 발생한것 같아요.", Toasts.Type.FAILURE);
             return false;
         }
         
@@ -371,7 +371,7 @@ class InterfaceManager {
 
     injectStyles() {
         const styleElement = document.createElement("style");
-        styleElement.id = "discord-enhancer-styles";
+        styleElement.id = "discord-utils-styles";
         styleElement.textContent = `
         .de-window {
             position: absolute;
