@@ -64,7 +64,6 @@ class ConfigurationManager {
             try {
                 this.config = {...this.defaultConfig, ...JSON.parse(savedData)};
             } catch (e) {
-                console.error("설정 로드 오류:", e);
                 this.config = this.defaultConfig;
             }
         }
@@ -122,7 +121,6 @@ class CallManager {
                         this.currentCallIp = match[1];
                     }
                 } catch (error) {
-                    console.error("RTC 서버 정보 파싱 오류:", error);
                 }
             }
             
@@ -130,7 +128,7 @@ class CallManager {
         }.bind(this);
     }
 
-    copyCurrentCallIp() {
+    async copyCurrentCallIp() {
         if (!this.currentCallIp) {
             showToast("통방에 들어가있지 않거나 오류가 발생한것 같아요.", Toasts.Type.FAILURE);
             return false;
@@ -178,65 +176,75 @@ class MessageProcessor {
     }
 
     setupListeners() {
-        addMessagePreSendListener(this.processOutgoingMessage.bind(this));
-        addMessagePreEditListener(this.processEditedMessage.bind(this));
+        addMessagePreSendListener(async (channelId, message) => {
+            await this.processOutgoingMessage(channelId, message);
+        });
+        addMessagePreEditListener(async (channelId, messageId, message) => {
+            await this.processEditedMessage(channelId, messageId, message);
+        });
     }
 
-    processOutgoingMessage(channelId, message) {
+    async processOutgoingMessage(channelId, message) {
         if (!message.content || message.content.trim().length === 0) return;
 
-        if (this.config.getValue('messageFormat.zwsMode')) {
-            message.content = message.content.split('').join('\u200B');
-        }
-        if (this.config.getValue('messageFormat.autoBold')) {
-            message.content = `**${message.content}**`;
-        }
-
-        if (this.config.getValue('polls.enabled')) {
-            this.convertMessageToPoll(channelId, message);
-        }
-
-        if (this.config.getValue('reactions.enabled')) {
-            this.setupAutoReaction(channelId, message);
-        }
-
-        if (this.config.getValue('messageFormat.prefixEnabled')) {
-            const prefix = this.config.getValue('messageFormat.prefix');
-            if (prefix) {
-                message.content = `${prefix} ${message.content}`;
+        try {
+            if (this.config.getValue('messageFormat.zwsMode')) {
+                message.content = message.content.split('').join('\u200B');
             }
-        }
-
-        if (this.config.getValue('messageFormat.suffixEnabled')) {
-            const suffix = this.config.getValue('messageFormat.suffix');
-            if (suffix) {
-                message.content = `${message.content} ${suffix}`;
+            if (this.config.getValue('messageFormat.autoBold')) {
+                message.content = `**${message.content}**`;
             }
-        }
 
-        if (this.config.getValue('messageFormat.randomTypoEnabled')) {
-            this.applyRandomTypo(message);
-        }
-    }
+            if (this.config.getValue('polls.enabled')) {
+                await this.convertMessageToPoll(channelId, message);
+            }
 
-    processEditedMessage(channelId, messageId, message) {
-        if (this.config.getValue('settings.silentEdit') && message.content) {
-            RestAPI.post({
-                url: `/channels/${channelId}/messages`,
-                body: {
-                    mobile_network_type: "unknown",
-                    content: message.content,
-                    nonce: messageId,
-                    tts: false,
-                    flags: 0
+            if (this.config.getValue('reactions.enabled')) {
+                await this.setupAutoReaction(channelId, message);
+            }
+
+            if (this.config.getValue('messageFormat.prefixEnabled')) {
+                const prefix = this.config.getValue('messageFormat.prefix');
+                if (prefix) {
+                    message.content = `${prefix} ${message.content}`;
                 }
-            });
-            
-            message.content = "";
+            }
+
+            if (this.config.getValue('messageFormat.suffixEnabled')) {
+                const suffix = this.config.getValue('messageFormat.suffix');
+                if (suffix) {
+                    message.content = `${message.content} ${suffix}`;
+                }
+            }
+
+            if (this.config.getValue('messageFormat.randomTypoEnabled')) {
+                await this.applyRandomTypo(message);
+            }
+        } catch (e) {
         }
     }
 
-    convertMessageToPoll(channelId, message) {
+    async processEditedMessage(channelId, messageId, message) {
+        try {
+            if (this.config.getValue('settings.silentEdit') && message.content) {
+                await RestAPI.post({
+                    url: `/channels/${channelId}/messages`,
+                    body: {
+                        mobile_network_type: "unknown",
+                        content: message.content,
+                        nonce: messageId,
+                        tts: false,
+                        flags: 0
+                    }
+                });
+                
+                message.content = "";
+            }
+        } catch (e) {
+        }
+    }
+
+    async convertMessageToPoll(channelId, message) {
         try {
             const optionCount = this.config.getValue('polls.optionCount');
             const defaultTitle = this.config.getValue('polls.defaultTitle') || "투표";
@@ -271,23 +279,21 @@ class MessageProcessor {
             message.poll = pollData;
             message.content = "";
             
-            setTimeout(() => {
+            setTimeout(async () => {
                 if (message.id) {
                     try {
-                        RestAPI.post({
+                        await RestAPI.post({
                             url: `/channels/${channelId}/polls/${message.id}/expire`
                         });
                     } catch(e) {
-                        console.error("투표 종료 오류:", e);
                     }
                 }
             }, 2000);
         } catch(e) {
-            console.error("투표 생성 오류:", e);
         }
     }
 
-    setupAutoReaction(channelId, message) {
+    async setupAutoReaction(channelId, message) {
         setTimeout(() => {
             if (!message.id) return;
             
@@ -304,11 +310,7 @@ class MessageProcessor {
                     url: reactionUrl,
                     body: {},
                     retries: 3
-                }).then(() => {
-                    console.log("리액션 추가 성공");
                 }).catch(error => {
-                    console.error("리액션 추가 실패:", error);
-                    
                     try {
                         FluxDispatcher.dispatch({
                             type: "MESSAGE_REACTION_ADD",
@@ -317,11 +319,9 @@ class MessageProcessor {
                             emoji: emoji
                         });
                     } catch (e) {
-                        console.error("디스패처 방식 리액션 추가 실패:", e);
                     }
                 });
             } catch (e) {
-                console.error("리액션 추가 처리 오류:", e);
             }
         }, 2000); 
     }
