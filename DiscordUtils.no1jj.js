@@ -254,22 +254,31 @@ class MessageProcessor {
     async convertMessageToPoll(channelId, message) {
         try {
             const optionCount = this.config.getValue('polls.optionCount');
+            const parts = message.content.split(';');
+            const emoji = this.config.getValue('reactions.emoji') || "☠️";
             
-            let userMessage = message.content.trim();
-            if (!userMessage) userMessage = "투표";
+            let question = parts[0] || "투표";
+            let options = parts.slice(1);
             
-            let question = userMessage;
-            let options = [];
-            for (let i = 0; i < optionCount; i++) {
-                options.push(userMessage);
+            if (options.length === 0) {
+                options = [`${emoji} ${question}`];
+            } else {
+                options = options.map(opt => `${emoji} ${opt}`);
             }
+            
+            const lastOption = options[options.length - 1];
+            while (options.length < optionCount) {
+                options.push(lastOption);
+            }
+            
+            options = options.slice(0, Math.min(optionCount, 10));
             
             const pollData = {
                 question: { text: question },
                 answers: options.map(opt => ({
-                    poll_media: { text: opt || " " }
+                    poll_media: { text: opt }
                 })),
-                duration: 1 
+                duration: 1
             };
             
             RestAPI.post({
@@ -283,11 +292,15 @@ class MessageProcessor {
             .then(response => {
                 const pollMessageId = response.id;
                 
+                if (this.config.getValue('reactions.enabled')) {
+                    this.addReactionToMessage(channelId, pollMessageId);
+                }
+                
                 setTimeout(() => {
                     RestAPI.post({
                         url: `/channels/${channelId}/polls/${pollMessageId}/expire`
                     });
-                }, 500); 
+                }, 500);
             });
             
             message.content = "";
@@ -298,84 +311,55 @@ class MessageProcessor {
 
     async setupAutoReaction(channelId, message) {
         const originalContent = message.content;
-        const userId = UserStore.getCurrentUser().id;
-        const targetChannelId = channelId;
-
-        const addReaction = (messageId) => {
-            if (!messageId) return;
-
-            let emoji = this.config.getValue('reactions.emoji') || "☠️";
-            if (!emoji.includes(":")) {
-                emoji = encodeURIComponent(emoji);
-            } else {
-                const match = emoji.match(/<a?:([^:]+):(\d+)>/);
-                if (match) {
-                    emoji = `${match[1]}:${match[2]}`;
+        
+        const sendMessageAndReact = () => {
+            RestAPI.post({
+                url: `/channels/${channelId}/messages`,
+                body: {
+                    content: originalContent,
+                    tts: false,
+                    flags: 0
                 }
-            }
-
-            RestAPI.put({
-                url: `/channels/${targetChannelId}/messages/${messageId}/reactions/${emoji}/@me`
             })
-            .catch(err => {
-                if (err.status === 400 && err.body?.code === 10014) {
-                    RestAPI.put({
-                        url: `/channels/${targetChannelId}/messages/${messageId}/reactions/%F0%9F%91%80/@me`
-                    });
+            .then(response => {
+                const messageId = response.body?.id;
+                if (messageId) {
+                    setTimeout(() => {
+                        this.addReactionToMessage(channelId, messageId);
+                    }, 500);
                 }
             });
+            
+            message.content = "";
+            return true;
         };
-
-        let messageFound = false;
-        let retryCount = 0;
-        const maxRetries = 5;
-
-        const messageHandler = function reactMessageHandler(event) {
-            if (
-                event.message &&
-                event.message.author &&
-                event.message.author.id === userId &&
-                event.channelId === targetChannelId &&
-                (event.message.content === originalContent ||
-                 (this.config.getValue('messageFormat.autoBold') &&
-                  event.message.content === `# ${originalContent}`))
-            ) {
-                messageFound = true;
-                
-                setTimeout(() => {
-                    addReaction(event.message.id);
-                    FluxDispatcher.unsubscribe("MESSAGE_CREATE", messageHandler);
-                }, 2000);
+        
+        return sendMessageAndReact();
+    }
+    
+    addReactionToMessage(channelId, messageId) {
+        if (!messageId) return;
+        
+        let emoji = this.config.getValue('reactions.emoji') || "☠️";
+        if (!emoji.includes(":")) {
+            emoji = encodeURIComponent(emoji);
+        } else {
+            const match = emoji.match(/<a?:([^:]+):(\d+)>/);
+            if (match) {
+                emoji = `${match[1]}:${match[2]}`;
             }
-        }.bind(this);
-
-        setTimeout(() => {
-            FluxDispatcher.subscribe("MESSAGE_CREATE", messageHandler);
-        }, 1000);
-
-        setTimeout(() => {
-            if (!messageFound && retryCount < maxRetries) {
-                retryCount++;
-                
-                RestAPI.get({
-                    url: `/channels/${targetChannelId}/messages?limit=10`
-                })
-                .then(response => {
-                    const messages = response.body;
-                    const ourMessage = messages.find(
-                        msg =>
-                            msg.author.id === userId &&
-                            (msg.content === originalContent ||
-                             (this.config.getValue('messageFormat.autoBold') &&
-                              msg.content === `# ${originalContent}`))
-                    );
-
-                    if (ourMessage) {
-                        addReaction(ourMessage.id);
-                    }
+        }
+        
+        RestAPI.put({
+            url: `/channels/${channelId}/messages/${messageId}/reactions/${emoji}/@me`
+        })
+        .catch(err => {
+            if (err.status === 400 && err.body?.code === 10014) {
+                RestAPI.put({
+                    url: `/channels/${channelId}/messages/${messageId}/reactions/%F0%9F%91%80/@me`
                 });
             }
-        }, 5000);
+        });
     }
 
     applyRandomTypo(message) {
