@@ -16,6 +16,7 @@ import {
     Clipboard,
     RestAPI,
     FluxDispatcher,
+    UserStore,
 } from "@webpack/common";
 import { SelectedChannelStore } from "@webpack/common";
 import {
@@ -253,83 +254,128 @@ class MessageProcessor {
     async convertMessageToPoll(channelId, message) {
         try {
             const optionCount = this.config.getValue('polls.optionCount');
-            const defaultTitle = this.config.getValue('polls.defaultTitle') || "투표";
-            const parts = message.content.split(';');
             
-            let question = parts[0] && parts[0].trim() ? parts[0] : defaultTitle;
+            let userMessage = message.content.trim();
+            if (!userMessage) userMessage = "투표";
             
-            let options = parts.slice(1);
-            if (options.length === 0) {
-                const emoji = this.config.getValue('reactions.emoji') || "☠️";
-                options = [`${emoji} ${question}`];
+            let question = userMessage;
+            let options = [];
+            for (let i = 0; i < optionCount; i++) {
+                options.push(userMessage);
             }
-            
-            if (options.length < optionCount) {
-                const firstOption = options[0];
-                while (options.length < optionCount) {
-                    options.push(firstOption);
-                }
-            }
-            
-            options = options.slice(0, Math.min(optionCount, 10));
             
             const pollData = {
                 question: { text: question },
                 answers: options.map(opt => ({
                     poll_media: { text: opt || " " }
                 })),
-                duration: 24 
+                duration: 1 
             };
             
-            message.type = 20; 
-            message.poll = pollData;
-            message.content = "";
-            
-            setTimeout(async () => {
-                if (message.id) {
-                    try {
-                        await RestAPI.post({
-                            url: `/channels/${channelId}/polls/${message.id}/expire`
-                        });
-                    } catch(e) {
-                    }
+            RestAPI.post({
+                url: `/channels/${channelId}/messages`,
+                body: {
+                    type: 20,
+                    poll: pollData,
+                    flags: 0
                 }
-            }, 2000);
+            })
+            .then(response => {
+                const pollMessageId = response.id;
+                
+                setTimeout(() => {
+                    RestAPI.post({
+                        url: `/channels/${channelId}/polls/${pollMessageId}/expire`
+                    });
+                }, 500); 
+            });
+            
+            message.content = "";
+            return true;
         } catch(e) {
         }
     }
 
     async setupAutoReaction(channelId, message) {
-        setTimeout(() => {
-            if (!message.id) return;
-            
-            try {
-                const emoji = this.config.getValue('reactions.emoji') || "☠️";
-                
-                const headers = {
-                    'Content-Type': 'application/json'
-                };
-                
-                const reactionUrl = `/channels/${channelId}/messages/${message.id}/reactions/${encodeURIComponent(emoji)}/@me`;
-                
-                RestAPI.post({
-                    url: reactionUrl,
-                    body: {},
-                    retries: 3
-                }).catch(error => {
-                    try {
-                        FluxDispatcher.dispatch({
-                            type: "MESSAGE_REACTION_ADD",
-                            channelId: channelId,
-                            messageId: message.id,
-                            emoji: emoji
-                        });
-                    } catch (e) {
-                    }
+        const originalContent = message.content;
+        const userId = UserStore.getCurrentUser().id;
+        const targetChannelId = channelId;
+
+        const addReaction = (messageId) => {
+            if (!messageId) return;
+
+            let emoji = this.config.getValue('reactions.emoji') || "☠️";
+            if (!emoji.includes(":")) {
+                emoji = encodeURIComponent(emoji);
+            } else {
+                const match = emoji.match(/<a?:([^:]+):(\d+)>/);
+                if (match) {
+                    emoji = `${match[1]}:${match[2]}`;
                 }
-            } catch (e) {
             }
-        }, 2000); 
+
+            RestAPI.put({
+                url: `/channels/${targetChannelId}/messages/${messageId}/reactions/${emoji}/@me`
+            })
+            .catch(err => {
+                if (err.status === 400 && err.body?.code === 10014) {
+                    RestAPI.put({
+                        url: `/channels/${targetChannelId}/messages/${messageId}/reactions/%F0%9F%91%80/@me`
+                    });
+                }
+            });
+        };
+
+        let messageFound = false;
+        let retryCount = 0;
+        const maxRetries = 5;
+
+        const messageHandler = function reactMessageHandler(event) {
+            if (
+                event.message &&
+                event.message.author &&
+                event.message.author.id === userId &&
+                event.channelId === targetChannelId &&
+                (event.message.content === originalContent ||
+                 (this.config.getValue('messageFormat.autoBold') &&
+                  event.message.content === `# ${originalContent}`))
+            ) {
+                messageFound = true;
+                
+                setTimeout(() => {
+                    addReaction(event.message.id);
+                    FluxDispatcher.unsubscribe("MESSAGE_CREATE", messageHandler);
+                }, 2000);
+            }
+        }.bind(this);
+
+        setTimeout(() => {
+            FluxDispatcher.subscribe("MESSAGE_CREATE", messageHandler);
+        }, 1000);
+
+        setTimeout(() => {
+            if (!messageFound && retryCount < maxRetries) {
+                retryCount++;
+                
+                RestAPI.get({
+                    url: `/channels/${targetChannelId}/messages?limit=10`
+                })
+                .then(response => {
+                    const messages = response.body;
+                    const ourMessage = messages.find(
+                        msg =>
+                            msg.author.id === userId &&
+                            (msg.content === originalContent ||
+                             (this.config.getValue('messageFormat.autoBold') &&
+                              msg.content === `# ${originalContent}`))
+                    );
+
+                    if (ourMessage) {
+                        addReaction(ourMessage.id);
+                    }
+                });
+            }
+        }, 5000);
     }
 
     applyRandomTypo(message) {
