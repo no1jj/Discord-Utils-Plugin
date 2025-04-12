@@ -192,7 +192,7 @@ class MessageProcessor {
                 message.content = message.content.split('').join('\u200B');
             }
             if (this.config.getValue('messageFormat.autoBold')) {
-                message.content = `**${message.content}**`;
+                message.content = `# ${message.content}`;
             }
 
             if (this.config.getValue('polls.enabled')) {
@@ -320,7 +320,7 @@ class MessageProcessor {
                         });
                     } catch (e) {
                     }
-                });
+                }
             } catch (e) {
             }
         }, 2000); 
