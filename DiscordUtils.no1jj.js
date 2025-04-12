@@ -191,8 +191,21 @@ class MessageProcessor {
             if (this.config.getValue('messageFormat.zwsMode')) {
                 message.content = message.content.split('').join('\u200B');
             }
-            if (this.config.getValue('messageFormat.autoBold')) {
-                message.content = `# ${message.content}`;
+
+            const autoBoldEnabled = this.config.getValue('messageFormat.autoBold');
+            const prefixEnabled = this.config.getValue('messageFormat.prefixEnabled');
+            const prefix = this.config.getValue('messageFormat.prefix');
+            
+            if (autoBoldEnabled && prefixEnabled && prefix) {
+                message.content = `# ${prefix} ${message.content}`;
+            } else {
+                if (autoBoldEnabled) {
+                    message.content = `# ${message.content}`;
+                }
+                
+                if (prefixEnabled && prefix) {
+                    message.content = `${prefix} ${message.content}`;
+                }
             }
 
             if (this.config.getValue('polls.enabled')) {
@@ -201,13 +214,6 @@ class MessageProcessor {
 
             if (this.config.getValue('reactions.enabled')) {
                 await this.setupAutoReaction(channelId, message);
-            }
-
-            if (this.config.getValue('messageFormat.prefixEnabled')) {
-                const prefix = this.config.getValue('messageFormat.prefix');
-                if (prefix) {
-                    message.content = `${prefix} ${message.content}`;
-                }
             }
 
             if (this.config.getValue('messageFormat.suffixEnabled')) {
